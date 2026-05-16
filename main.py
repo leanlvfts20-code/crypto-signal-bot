@@ -178,34 +178,50 @@ Rules:
 - Output ONLY the JSON, nothing else"""
 
 
-def run_search(prompt: str, max_tokens: int = 2048) -> str:
-    messages = [{"role": "user", "content": prompt}]
-    for _ in range(8):
-        response = client.messages.create(
-            model="claude-sonnet-4-5",
-            max_tokens=max_tokens,
-            system=SEARCH_SYSTEM,
-            tools=[{"type": "web_search_20250305", "name": "web_search"}],
-            messages=messages,
-        )
-        messages.append({"role": "assistant", "content": response.content})
+def run_search(prompt: str, max_tokens: int = 1024) -> str:
+    """Agentic search with auto-retry on rate limit (up to 3 attempts)."""
+    for attempt in range(3):
+        try:
+            messages = [{"role": "user", "content": prompt}]
+            for _ in range(8):
+                response = client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=max_tokens,
+                    system=SEARCH_SYSTEM,
+                    tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                    messages=messages,
+                )
+                messages.append({"role": "assistant", "content": response.content})
 
-        if response.stop_reason == "end_turn":
-            return "".join(b.text for b in response.content if hasattr(b, "text"))
+                if response.stop_reason == "end_turn":
+                    return "".join(b.text for b in response.content if hasattr(b, "text"))
 
-        if response.stop_reason == "tool_use":
-            tool_results = [
-                {"type": "tool_result", "tool_use_id": b.id, "content": "OK"}
-                for b in response.content if b.type == "tool_use"
-            ]
-            messages.append({"role": "user", "content": tool_results})
-            continue
+                if response.stop_reason == "tool_use":
+                    tool_results = [
+                        {"type": "tool_result", "tool_use_id": b.id, "content": "OK"}
+                        for b in response.content if b.type == "tool_use"
+                    ]
+                    messages.append({"role": "user", "content": tool_results})
+                    continue
 
-        text = "".join(b.text for b in response.content if hasattr(b, "text"))
-        if text: return text
-        raise RuntimeError(f"Unexpected stop_reason: {response.stop_reason}")
+                text = "".join(b.text for b in response.content if hasattr(b, "text"))
+                if text:
+                    return text
+                raise RuntimeError(f"Unexpected stop_reason: {response.stop_reason}")
 
-    raise RuntimeError("Search loop exceeded max rounds.")
+            raise RuntimeError("Search loop exceeded max rounds.")
+
+        except Exception as e:
+            err = str(e)
+            if "rate_limit" in err.lower() or "429" in err:
+                wait = 60 * (attempt + 1)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Rate limit hit. Waiting {wait}s (retry {attempt + 1}/3)...")
+                time.sleep(wait)
+                if attempt == 2:
+                    raise RuntimeError("Rate limit: max retries exceeded.") from e
+                continue
+            raise
+
 
 
 def get_analysis(edition: str) -> dict:
@@ -242,7 +258,7 @@ def get_analysis(edition: str) -> dict:
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Generating {edition} signal picks...")
 
     response = client.messages.create(
-        model="claude-sonnet-4-5",
+        model="claude-haiku-4-5-20251001",
         max_tokens=2500,
         system=get_analysis_system(edition),
         messages=[{
@@ -532,12 +548,24 @@ def send_email(html: str, edition: str):
 
 def run_job(edition: str):
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Starting {edition} signal job...")
-    try:
-        data = get_analysis(edition)
-        html = build_html(data, edition)
-        send_email(html, edition)
-    except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Error ({edition}): {e}")
+    for attempt in range(3):
+        try:
+            data = get_analysis(edition)
+            html = build_html(data, edition)
+            send_email(html, edition)
+            return
+        except Exception as e:
+            err = str(e)
+            if "rate_limit" in err.lower() or "429" in err or "max retries" in err.lower():
+                wait = 90 * (attempt + 1)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Job rate limited. Waiting {wait}s (retry {attempt + 1}/3)...")
+                time.sleep(wait)
+                if attempt == 2:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ {edition} job failed after 3 attempts: {e}")
+                continue
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Error ({edition}): {e}")
+            return
+
 
 
 if __name__ == "__main__":
