@@ -210,31 +210,44 @@ def run_search(prompt: str, max_tokens: int = 2048) -> str:
 
 def get_analysis(edition: str) -> dict:
     today = datetime.now().strftime("%A, %B %d, %Y")
-    now = datetime.now().strftime("%I:%M %p")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Searching markets ({edition} edition)...")
 
-    research = run_search(
-        f"Today is {today}, time is {now}. Search for ALL of the following and summarize concisely:\n"
-        "1. Current Fear & Greed Index value and label\n"
-        "2. BTC and ETH current prices and 24h trend\n"
-        "3. Top 3 gaining/moving cryptocurrencies today with reasons\n"
-        "4. Trending meme coins on social media right now\n"
-        "5. Asia market session summary (Nikkei, Hang Seng, Shanghai)\n"
-        "6. Top 3 most important US stock news today (earnings, IPOs, major moves)\n"
-        "7. Any upcoming earnings calls today or tomorrow\n"
-        "8. Major stock movers pre/post market today\n"
-        "Be specific with numbers and prices."
+    # Search 1: Crypto + Fear & Greed
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Searching crypto markets...")
+    crypto_research = run_search(
+        f"Today {today}. Brief answers only: "
+        "1) Current Fear and Greed Index value and label "
+        "2) BTC price and 24h trend "
+        "3) ETH price and 24h trend "
+        "4) Top 2 altcoins gaining today and why "
+        "5) One trending meme coin on Twitter/Reddit right now. "
+        "Numbers only, one line per item.",
+        max_tokens=1024
     )
+
+    time.sleep(15)  # pause between searches to avoid rate limit
+
+    # Search 2: Stocks + Asia
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Searching stocks and Asia markets...")
+    stock_research = run_search(
+        f"Today {today}. Brief answers only: "
+        "1) Nikkei and Hang Seng performance today one line each "
+        "2) Top 2 US stock movers today and reason "
+        "3) Any earnings reports released today and outcome. "
+        "Numbers only, one line per item.",
+        max_tokens=1024
+    )
+
+    combined = f"CRYPTO DATA:\n{crypto_research[:1200]}\n\nSTOCKS/ASIA DATA:\n{stock_research[:1200]}"
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Generating {edition} signal picks...")
 
     response = client.messages.create(
         model="claude-sonnet-4-5",
-        max_tokens=3000,
+        max_tokens=2500,
         system=get_analysis_system(edition),
         messages=[{
             "role": "user",
-            "content": f"Market research for {today} ({edition} edition):\n\n{research[:4000]}\n\nOutput the JSON now."
+            "content": f"Market research for {today} ({edition} edition):\n\n{combined}\n\nOutput the JSON now."
         }],
     )
 
